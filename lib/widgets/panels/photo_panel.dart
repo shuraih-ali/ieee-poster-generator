@@ -7,6 +7,7 @@ import '../../core/constants/app_colors.dart';
 import '../../models/poster_style.dart';
 import '../../providers/editor_provider.dart';
 import '../common/helpers.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
 class PhotoPanel extends StatefulWidget {
   const PhotoPanel({super.key});
@@ -20,42 +21,55 @@ class _PhotoPanelState extends State<PhotoPanel> {
   final _picker = ImagePicker();
 
   Future<void> _pick(ImageSource source) async {
-    Permission perm;
+  try {
     if (source == ImageSource.camera) {
-      perm = Permission.camera;
+      final status = await Permission.camera.request();
+      if (status.isPermanentlyDenied) {
+        _showSettingsDialog('Camera');
+        return;
+      }
+      if (!status.isGranted) return;
     } else {
-      // Android 13+ uses photos permission, older uses storage
-      perm = Platform.isAndroid ? Permission.photos : Permission.photos;
+      // For gallery — try directly first, request permission only if denied
+      if (Platform.isAndroid) {
+        final androidInfo = await DeviceInfoPlugin().androidInfo;
+        PermissionStatus status;
+        if (androidInfo.version.sdkInt >= 33) {
+          status = await Permission.photos.request();
+        } else {
+          status = await Permission.storage.request();
+        }
+        if (status.isPermanentlyDenied) {
+          _showSettingsDialog('Photos');
+          return;
+        }
+        if (!status.isGranted) return;
+      }
+      // iOS handles permissions automatically via image_picker
     }
-
-    final status = await perm.request();
-    if (!mounted) return;
-
-    if (status.isPermanentlyDenied) {
-      _showSettingsDialog(
-          source == ImageSource.camera ? 'Camera' : 'Photos');
-      return;
-    }
-    if (!status.isGranted) return;
 
     setState(() => _loading = true);
-    try {
-      final xf = await _picker.pickImage(
-          source: source, maxWidth: 1200, imageQuality: 90);
-      if (!mounted) return;
-      if (xf != null) {
-        final prov = context.read<EditorProvider>();
-        prov.updateProfile(prov.profile.copyWith(photoPath: xf.path));
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to pick image: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _loading = false);
+
+    final xf = await _picker.pickImage(
+      source: source,
+      maxWidth: 1200,
+      imageQuality: 90,
+    );
+
+    if (!mounted) return;
+    if (xf != null) {
+      final prov = context.read<EditorProvider>();
+      prov.updateProfile(prov.profile.copyWith(photoPath: xf.path));
     }
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to pick image: $e')),
+    );
+  } finally {
+    if (mounted) setState(() => _loading = false);
   }
+}
 
   void _showSettingsDialog(String permName) {
     showDialog(
